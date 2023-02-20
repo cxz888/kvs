@@ -1,5 +1,7 @@
 //! error module
 
+use std::str::Utf8Error;
+
 use thiserror::Error;
 
 /// crate-level error
@@ -14,6 +16,15 @@ pub enum Error {
     /// Error for serializing and deserializing
     #[error("serde error: {0}")]
     SeredError(#[from] serde_json::Error),
+    /// Error for sled
+    #[error("sled error: {0}")]
+    SledError(#[from] sled::Error),
+    /// Error for utf-8, when decoded from sled
+    #[error("Invalid utf-8 from sled")]
+    NonUtf8(#[from] Utf8Error),
+    ///
+    #[error("Decode error: {0}")]
+    DecodeError(String),
 }
 
 /// crate-level Result type
