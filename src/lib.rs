@@ -8,26 +8,34 @@ mod kvstore;
 mod server;
 mod sled;
 
+mod buf_file;
+mod client;
+/// Thread pool impl
+pub mod thread_pool;
+
 use std::{
-    io::{BufReader, Read},
+    io::{self, Read},
     net::TcpStream,
 };
 
+const IS_TEST: bool = true;
+
 pub use crate::{
+    client::KvsClient,
     error::{Error, Result},
-    kvstore::KvStore,
-    server::KvsServer,
+    kvstore::{rwlock, KvStore},
+    server::{shutdown, KvsServer},
     sled::SledKvsEngine,
 };
 
 /// A key-value engine
-pub trait KvsEngine {
+pub trait KvsEngine: Clone + Send + 'static {
     /// Set the value corresponding to key to `value`,
-    fn set(&mut self, key: String, value: String) -> Result<()>;
+    fn set(&self, key: String, value: String) -> Result<()>;
     /// get the value the `key` corresponding to
-    fn get(&mut self, key: String) -> Result<Option<String>>;
+    fn get(&self, key: &str) -> Result<Option<String>>;
     /// Remove the key
-    fn remove(&mut self, key: String) -> Result<()>;
+    fn remove(&self, key: String) -> Result<()>;
 }
 
 ///
@@ -48,16 +56,16 @@ pub enum Request {
 }
 
 ///
-#[repr(u8)]
+#[derive(PartialEq, Debug)]
 pub enum Response {
     ///
-    Value(String) = 0,
+    Value(String),
     ///
-    Ok = 1,
+    Ok,
     ///
-    NoKey = 2,
+    NoKey,
     ///
-    Err = 0xff,
+    Err,
 }
 
 impl Encoder {
@@ -118,40 +126,46 @@ impl Encoder {
     }
 }
 
-///
-pub struct Decoder {
-    buf: Vec<u8>,
-    reader: BufReader<TcpStream>,
+impl Default for Encoder {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
-impl Decoder {
+///
+pub struct Decoder<'a> {
+    buf: Vec<u8>,
+    reader: io::BufReader<&'a mut TcpStream>,
+}
+
+impl<'a> Decoder<'a> {
     ///
-    pub fn new(stream: TcpStream) -> Self {
+    pub fn new(stream: &'a mut TcpStream) -> Self {
         Self {
             buf: Vec::new(),
-            reader: BufReader::new(stream),
+            reader: io::BufReader::new(stream),
         }
     }
     fn decode_len(&mut self) -> Result<usize> {
         let mut buf = [0; 4];
-        if let Err(_) = self.reader.read_exact(&mut buf) {
-            return Err(Error::DecodeError(format!("Can't get len")));
+        if self.reader.read_exact(&mut buf).is_err() {
+            return Err(Error::DecodeError("Can't get len".to_string()));
         };
         Ok(u32::from_be_bytes(buf) as usize)
     }
     fn decode_string(&mut self) -> Result<String> {
         let len = self.decode_len()?;
         self.buf.resize(len, 0);
-        if let Err(_) = self.reader.read_exact(&mut self.buf[0..len]) {
-            return Err(Error::DecodeError(format!("Can't get key")));
+        if self.reader.read_exact(&mut self.buf[0..len]).is_err() {
+            return Err(Error::DecodeError("Can't get key".to_string()));
         };
         Ok(std::str::from_utf8(&self.buf[0..len])?.to_owned())
     }
     ///
     pub fn decode_request(&mut self) -> Result<Request> {
         let mut type_ = [0];
-        if let Err(_) = self.reader.read_exact(&mut type_) {
-            return Err(Error::DecodeError(format!("Type byte nonexists")));
+        if self.reader.read_exact(&mut type_).is_err() {
+            return Err(Error::DecodeError("Type byte nonexists".to_string()));
         };
         match type_[0] {
             // set
@@ -176,8 +190,9 @@ impl Decoder {
     ///
     pub fn decode_response(&mut self) -> Result<Response> {
         let mut type_ = [0];
-        if let Err(_) = self.reader.read_exact(&mut type_) {
-            return Err(Error::DecodeError(format!("Type byte nonexists")));
+        if let Err(e) = self.reader.read_exact(&mut type_) {
+            log::error!("Type byte error: {e}");
+            return Err(Error::DecodeError("Type byte nonexists".to_string()));
         };
         match type_[0] {
             0 => {

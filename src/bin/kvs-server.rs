@@ -6,12 +6,14 @@ use std::{
     fmt::Display,
     net::{IpAddr, Ipv4Addr, SocketAddr},
     path::{Path, PathBuf},
+    sync::{atomic::AtomicBool, Arc},
+    thread,
 };
 
 use anyhow::{anyhow, Result};
 use clap::Parser;
 use env_logger::Target;
-use kvs::{KvStore, KvsEngine, KvsServer, SledKvsEngine};
+use kvs::{thread_pool::SharedQueueThreadPool, KvStore, KvsEngine, KvsServer, SledKvsEngine};
 
 const DEFAULT_SOCKET_ADDR: SocketAddr =
     SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 4000);
@@ -59,7 +61,9 @@ fn main() -> Result<()> {
     log::info!("listen on https://{}", cli.addr);
 
     fn run_engine(engine: impl KvsEngine, addr: SocketAddr) -> Result<()> {
-        let mut server = KvsServer::new(engine);
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let n_workers = thread::available_parallelism().unwrap().get();
+        let server = KvsServer::<_, SharedQueueThreadPool>::new(engine, shutdown, n_workers);
         Ok(server.listen_on(addr)?)
     }
 
@@ -96,19 +100,15 @@ fn get_real_engine(cli_engine: Option<String>, path: &Path) -> Result<Engine> {
                 return Err(anyhow!("Wrong engine type, 'kvs' expected"));
             }
             Engine::Kvs
-        } else {
-            if let Some(engine) = sepcified_engine {
-                engine
-            } else {
-                Engine::Kvs
-            }
-        }
-    } else {
-        if let Some(engine) = sepcified_engine {
+        } else if let Some(engine) = sepcified_engine {
             engine
         } else {
             Engine::Kvs
         }
+    } else if let Some(engine) = sepcified_engine {
+        engine
+    } else {
+        Engine::Kvs
     };
     Ok(real_engine)
 }

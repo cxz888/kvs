@@ -25,6 +25,12 @@ pub enum Error {
     ///
     #[error("Decode error: {0}")]
     DecodeError(String),
+    /// Thread pool cannot be zero size
+    #[error("Thread pool cannot be zero size")]
+    ZeroSizedPool,
+    /// Error when build rayon thread pool
+    #[error("Rayon error: {0}")]
+    RayonError(#[from] rayon::ThreadPoolBuildError),
 }
 
 /// crate-level Result type

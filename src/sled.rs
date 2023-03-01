@@ -2,9 +2,10 @@ use std::path::Path;
 
 use sled::Db;
 
-use crate::{Error, KvsEngine, Result};
+use crate::{Error, KvsEngine, Result, IS_TEST};
 
 /// A sled wrapper to impl `KvsEngine` trait
+#[derive(Clone)]
 pub struct SledKvsEngine {
     db: Db,
 }
@@ -16,23 +17,32 @@ impl SledKvsEngine {
             db: sled::open(path)?,
         })
     }
+    ///
+    pub fn flush(&self) -> Result<()> {
+        self.db.flush()?;
+        Ok(())
+    }
 }
 
 impl KvsEngine for SledKvsEngine {
-    fn get(&mut self, key: String) -> Result<Option<String>> {
+    fn get(&self, key: &str) -> Result<Option<String>> {
         let Some(value) = self.db.get(key)? else {
             return Ok(None);
         };
         Ok(Some(std::str::from_utf8(&value)?.to_owned()))
     }
-    fn set(&mut self, key: String, value: String) -> Result<()> {
+    fn set(&self, key: String, value: String) -> Result<()> {
         self.db.insert(key, value.into_bytes())?;
-        // self.db.flush()?;
+        if IS_TEST {
+            self.db.flush()?;
+        }
         Ok(())
     }
-    fn remove(&mut self, key: String) -> Result<()> {
+    fn remove(&self, key: String) -> Result<()> {
         self.db.remove(key)?.ok_or(Error::RemoveNonexistKey)?;
-        // self.db.flush()?;
+        if IS_TEST {
+            self.db.flush()?;
+        }
         Ok(())
     }
 }

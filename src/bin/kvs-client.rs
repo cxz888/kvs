@@ -1,11 +1,8 @@
-use std::{
-    io::Write,
-    net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream},
-};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
 use anyhow::{anyhow, Result};
 use clap::{Parser, Subcommand};
-use kvs::{Decoder, Encoder, Request, Response};
+use kvs::{KvsClient, Request, Response};
 
 const DEFAULT_SOCKET_ADDR: SocketAddr =
     SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 4000);
@@ -41,7 +38,6 @@ enum Commands {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
-    let mut encoder = Encoder::new();
     let mut is_remove = false;
     let (addr, request) = match cli.commands {
         Commands::Set { key, value, addr } => (addr, Request::Set(key, value)),
@@ -51,13 +47,8 @@ fn main() -> Result<()> {
             (addr, Request::Rm(key))
         }
     };
-    let mut stream = TcpStream::connect(addr)?;
-    let buf = encoder.encode_request(request);
-    stream.write_all(buf)?;
-    stream.flush()?;
-
-    let mut decoder = Decoder::new(stream);
-    let response = decoder.decode_response()?;
+    let mut client = KvsClient::new(addr);
+    let response = client.request(request)?;
     match response {
         Response::Value(value) => {
             println!("{value}")
